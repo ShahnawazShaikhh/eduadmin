@@ -1,0 +1,32 @@
+# ----------------------------
+# Angular
+# ----------------------------
+student-app/node_modules/
+student-app/.angular/
+student-app/dist/
+
+# ----------------------------
+# ASP.NET Core
+# ----------------------------
+**/bin/
+**/obj/
+**/.vs/
+
+# ----------------------------
+# Visual Studio
+# ----------------------------
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# ----------------------------
+# Logs
+# ----------------------------
+*.log
+
+# OS Files
+.DS_Store
+Thumbs.db

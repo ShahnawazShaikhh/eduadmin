@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+
+  studentapi:
+    build:
+      context: ./StudentAPI/StudentAPI/StudentAPI
+      dockerfile: Dockerfile
+
+    container_name: studentapi
+    restart: unless-stopped
+
+    ports:
+      - "7272:5000"
+
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: "http://+:5000"
+      ConnectionStrings__DefaultConnection: "Server=192.168.1.102,1433;Database=StudentDB;User Id=sa;Password=Student@12345#;TrustServerCertificate=True;Encrypt=False;"
+
+    networks:
+      - student-network
+
+  studentapp:
+    build:
+      context: ./student-app
+      dockerfile: Dockerfile
+
+    container_name: studentapp
+    restart: unless-stopped
+
+    ports:
+      - "4200:80"
+
+    depends_on:
+      - studentapi
+
+    networks:
+      - student-network
+
+networks:
+  student-network:
+    driver: bridge

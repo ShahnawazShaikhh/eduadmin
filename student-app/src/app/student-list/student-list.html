@@ -1,0 +1,106 @@
+<div class="d-flex justify-content-end mb-3">
+
+    <button
+        class="btn btn-primary me-2"
+        (click)="showAllStudents()">
+
+        Show All Data
+
+    </button>
+
+    <button
+        class="btn btn-secondary"
+        *ngIf="showStudents"
+        (click)="hideStudents()">
+
+        Hide Data
+
+    </button>
+
+</div>
+
+<div *ngIf="showStudents">
+
+    <div class="card shadow-lg border-0">
+
+        <div class="card-header bg-dark text-white d-flex justify-content-between">
+
+            <h4 class="mb-0">
+                Student List
+            </h4>
+
+            <span class="badge bg-warning text-dark">
+                Total : {{ students.length }}
+            </span>
+
+        </div>
+
+        <div class="card-body">
+
+            <div class="table-responsive">
+
+                <table class="table table-hover table-striped align-middle">
+
+                    <thead class="table-primary">
+
+                        <tr>
+                            <th>#</th>
+                            <th>Name</th>
+                            <th>Email</th>
+                            <th>Course</th>
+                            <th>Age</th>
+                            <th class="text-center">Actions</th>
+                        </tr>
+
+                    </thead>
+
+                    <tbody>
+
+                        <tr *ngFor="let student of students; let i = index">
+
+                            <td>{{ i + 1 }}</td>
+
+                            <td>{{ student.name }}</td>
+
+                            <td>{{ student.email }}</td>
+
+                            <td>
+                                <span class="badge bg-info">
+                                    {{ student.course }}
+                                </span>
+                            </td>
+
+                            <td>{{ student.age }}</td>
+
+                            <td class="text-center">
+
+                                <button
+                                    class="btn btn-warning btn-sm me-2">
+
+                                    Edit
+
+                                </button>
+
+                                <button
+                                    class="btn btn-danger btn-sm"
+                                    (click)="deleteStudent(student.id)">
+
+                                    Delete
+
+                                </button>
+
+                            </td>
+
+                        </tr>
+
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>

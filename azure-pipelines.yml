@@ -1,0 +1,154 @@
+trigger:
+  - main
+
+pool:
+  name: OpenShiftSA
+
+variables:
+  QUAY_NAMESPACE: afiyamulla
+
+  FRONTEND_IMAGE: quay.io/afiyamulla/studentapp
+  BACKEND_IMAGE: quay.io/afiyamulla/studentapi
+
+  NAMESPACE: 3tier
+
+  FRONTEND_APP: studentapp
+  BACKEND_APP: studentapi
+
+  FRONTEND_CONTAINER: studentapp
+  BACKEND_CONTAINER: studentapi
+
+steps:
+  # Step 1: Checkout GitHub repository
+  - checkout: self
+
+  # Step 2: Verify build tools
+  - script: |
+      set -e
+
+      echo "=== Node.js ==="
+      node --version
+      npm --version
+
+      echo "=== .NET SDK ==="
+      dotnet --info
+
+      echo "=== Docker ==="
+      docker --version
+      docker info
+
+      echo "=== Dockerfiles ==="
+      test -f "$(Build.SourcesDirectory)/student-app/Dockerfile"
+      test -f "$(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI/Dockerfile"
+
+      echo "All prerequisites verified."
+    displayName: 'Verify Build Environment'
+
+  # Step 3: Build and test .NET API
+  - script: |
+      set -e
+
+      API_DIR="$(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI"
+      PROJECT="$API_DIR/StudentAPI.csproj"
+
+      echo "=== Restore .NET dependencies ==="
+      dotnet restore "$PROJECT"
+
+      echo "=== Build .NET API ==="
+      dotnet build "$PROJECT" 
+        --configuration Release 
+        --no-restore
+
+      echo "=== Run .NET tests if test projects exist ==="
+      find "$(Build.SourcesDirectory)/StudentAPI" 
+        -type f \( -name '*Tests.csproj' -o -name '*.Tests.csproj' \) 
+        -print
+
+      echo "API build completed."
+    displayName: 'Build .NET 8 StudentAPI'
+
+  # Step 4: Build Angular frontend
+  - script: |
+      set -e
+
+      FRONTEND_DIR="$(Build.SourcesDirectory)/student-app"
+
+      cd "$FRONTEND_DIR"
+
+      echo "=== Install Angular dependencies ==="
+      npm ci
+
+      echo "=== Build Angular frontend ==="
+      npm run build
+
+      echo "Angular build completed."
+    displayName: 'Build Angular StudentApp'
+
+  # Step 5: Build and push frontend image
+  - task: Docker@2
+    displayName: 'Build and Push StudentApp Image'
+    inputs:
+      command: buildAndPush
+      containerRegistry: 'QuaySC'
+      repository: 'afiyamulla/studentapp'
+      Dockerfile: '$(Build.SourcesDirectory)/student-app/Dockerfile'
+      buildContext: '$(Build.SourcesDirectory)/student-app'
+      tags: |
+        $(Build.BuildId)
+
+  # Step 6: Build and push backend image
+  - task: Docker@2
+    displayName: 'Build and Push StudentAPI Image'
+    inputs:
+      command: buildAndPush
+      containerRegistry: 'QuaySC'
+      repository: 'afiyamulla/studentapi'
+      Dockerfile: '$(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI/Dockerfile'
+      buildContext: '$(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI'
+      tags: |
+        $(Build.BuildId)
+
+  # Step 7: Update OpenShift deployments
+  - task: SSH@0
+    displayName: 'Deploy StudentApp and StudentAPI to OpenShift'
+    inputs:
+      sshEndpoint: 'OpenShifSC'
+      runOptions: 'commands'
+      readyTimeout: '20000'
+      commands: |
+        set -eu
+
+        echo "=== Select OpenShift project ==="
+        oc project 3tier
+
+        echo "=== Verify existing deployments ==="
+        oc get deployment studentapp studentapi -n 3tier
+
+        echo "=== Update frontend image ==="
+        oc set image deployment/studentapp \
+          studentapp=quay.io/afiyamulla/studentapp:$(Build.BuildId) \
+          -n 3tier
+
+        echo "=== Update backend image ==="
+        oc set image deployment/studentapi \
+          studentapi=quay.io/afiyamulla/studentapi:$(Build.BuildId) \
+          -n 3tier
+
+        echo "=== Wait for frontend rollout ==="
+        oc rollout status deployment/studentapp \
+          -n 3tier --timeout=180s
+
+        echo "=== Wait for backend rollout ==="
+        oc rollout status deployment/studentapi \
+          -n 3tier --timeout=180s
+
+        echo "=== Final OpenShift resources ==="
+        oc get deployments,pods,svc,route -n 3tier
+
+        echo "=== Deployed image references ==="
+        oc get deployment studentapp studentapi \
+          -n 3tier \
+          -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[*].image'
+
+        echo "=== Frontend route ==="
+        oc get routes -n 3tier

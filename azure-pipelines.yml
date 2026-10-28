@@ -2,7 +2,7 @@ trigger:
   - main
 
 pool:
-  name: OpenShiftSA
+  name: openshift-reena
 
 variables:
   QUAY_NAMESPACE: afiyamulla

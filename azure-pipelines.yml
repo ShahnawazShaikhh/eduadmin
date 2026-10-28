@@ -1,35 +1,32 @@
 trigger:
-  branches:
-    include:
-      - main
+  - main
 
 pool:
   name: Default
 
 variables:
-  QUAY_NAMESPACE: afiyamulla
-  FRONTEND_IMAGE: quay.io/afiyamulla/studentapp
-  BACKEND_IMAGE: quay.io/afiyamulla/studentapi
-  OPENSHIFT_NAMESPACE: 3tier
+  buildConfiguration: Release
+  frontendRepository: afiyamulla/studentapp
+  backendRepository: afiyamulla/studentapi
 
 steps:
   - checkout: self
-    displayName: Checkout Source Code
+    displayName: Checkout GitHub Repository
 
   - task: UseDotNet@2
     displayName: Install .NET 8 SDK
     inputs:
       packageType: sdk
-      version: 8.0.x
+      version: '8.0.x'
 
   - task: NodeTool@0
     displayName: Install Node.js 22
     inputs:
-      versionSpec: 22.x
+      versionSpec: '22.x'
 
   - script: |
       set -eu
-      echo "===== VERIFY BUILD TOOLS ====="
+      echo "===== VERIFY TOOLS ====="
       git --version
       dotnet --version
       node --version
@@ -43,86 +40,57 @@ steps:
       API_DIR="$(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI"
       PROJECT="$API_DIR/StudentAPI.csproj"
 
+      test -f "$PROJECT"
+
       echo "===== RESTORE .NET DEPENDENCIES ====="
       dotnet restore "$PROJECT"
 
       echo "===== BUILD .NET API ====="
-      dotnet build "$PROJECT" --configuration Release --no-restore
-
-      echo "===== .NET BUILD SUCCESSFUL ====="
+      dotnet build "$PROJECT" --configuration "$(buildConfiguration)" --no-restore
     displayName: Build StudentAPI
 
   - script: |
       set -eu
       FRONTEND_DIR="$(Build.SourcesDirectory)/student-app"
 
-      echo "===== INSTALL ANGULAR DEPENDENCIES ====="
+      test -f "$FRONTEND_DIR/package.json"
+      test -f "$FRONTEND_DIR/package-lock.json"
+
       cd "$FRONTEND_DIR"
+
+      echo "===== INSTALL ANGULAR DEPENDENCIES ====="
       npm ci
 
       echo "===== BUILD ANGULAR FRONTEND ====="
       npm run build
-
-      echo "===== ANGULAR BUILD SUCCESSFUL ====="
     displayName: Build StudentApp
 
   - task: Docker@2
-    displayName: Build and Push Angular Image to Quay.io
+    displayName: Build and Push StudentApp to Quay.io
     inputs:
       command: buildAndPush
       containerRegistry: QuaySC
-      repository: afiyamulla/studentapp
+      repository: $(frontendRepository)
       Dockerfile: $(Build.SourcesDirectory)/student-app/Dockerfile
       buildContext: $(Build.SourcesDirectory)/student-app
       tags: |
         $(Build.BuildId)
 
   - task: Docker@2
-    displayName: Build and Push .NET API Image to Quay.io
+    displayName: Build and Push StudentAPI to Quay.io
     inputs:
       command: buildAndPush
       containerRegistry: QuaySC
-      repository: afiyamulla/studentapi
+      repository: $(backendRepository)
       Dockerfile: $(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI/Dockerfile
       buildContext: $(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI
       tags: |
         $(Build.BuildId)
 
-  - task: SSH@0
-    displayName: Deploy Images to Existing OpenShift Deployments
-    inputs:
-      sshEndpoint: OpenShifSC
-      runOptions: commands
-      readyTimeout: 20000
-      commands: |
-        set -eu
-
-        echo "===== CHECK OPENSHIFT LOGIN ====="
-        oc whoami
-
-        echo "===== CHECK PROJECT ====="
-        oc get project 3tier
-        oc project 3tier
-
-        echo "===== VERIFY EXISTING DEPLOYMENTS ====="
-        oc get deployment studentapp studentapi -n 3tier
-
-        echo "===== UPDATE FRONTEND IMAGE ====="
-        oc set image deployment/studentapp studentapp=quay.io/afiyamulla/studentapp:$(Build.BuildId) -n 3tier
-
-        echo "===== UPDATE BACKEND IMAGE ====="
-        oc set image deployment/studentapi studentapi=quay.io/afiyamulla/studentapi:$(Build.BuildId) -n 3tier
-
-        echo "===== WAIT FOR FRONTEND ROLLOUT ====="
-        oc rollout status deployment/studentapp -n 3tier --timeout=180s
-
-        echo "===== WAIT FOR BACKEND ROLLOUT ====="
-        oc rollout status deployment/studentapi -n 3tier --timeout=180s
-
-        echo "===== VERIFY DEPLOYMENTS AND PODS ====="
-        oc get deployments,pods,svc,routes -n 3tier
-
-        echo "===== VERIFY DEPLOYED IMAGES ====="
-        oc get deployment studentapp studentapi -n 3tier -o custom-columns=NAME:.metadata.name,IMAGE:.spec.template.spec.containers[*].image
-
-        echo "===== DEPLOYMENT COMPLETED ====="
+  - script: |
+      echo "======================================"
+      echo "CI PIPELINE COMPLETED SUCCESSFULLY"
+      echo "Frontend: quay.io/$(frontendRepository):$(Build.BuildId)"
+      echo "Backend:  quay.io/$(backendRepository):$(Build.BuildId)"
+      echo "======================================"
+    displayName: Display Published Images

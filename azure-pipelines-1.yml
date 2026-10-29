@@ -1,19 +1,141 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
 
+# Pipeline ko tab trigger karo jab main branch par code push ho.
 trigger:
-- main
+  branches:
+    include:
+      - main
 
+# Pull request par abhi separate pipeline trigger disable hai.
+# Baad mein PR validation enable karenge.
+pr: none
+
+# Azure DevOps ka existing self-hosted agent pool select karo.
+# Yahan apne actual ONLINE agent pool ka naam likhna hai.
 pool:
-  vmImage: OpenShiftSA
+  name: OpenShiftSA
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+# Variables mein application folders ke relative paths store hain.
+# Ye paths GitHub repository ke root se calculate hote hain.
+variables:
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+  # Angular application ka folder.
+  # Example: repository-root/student-app/package.json
+  - name: frontendPath
+    value: 'student-app'
+
+  # .NET API project ka folder.
+  # Example: repository-root/StudentAPI/StudentAPI/StudentAPI/StudentAPI.csproj
+  - name: backendPath
+    value: 'StudentAPI/StudentAPI/StudentAPI'
+
+# Pipeline ka pehla stage: source code aur agent validate karna.
+stages:
+  - stage: Validate
+    displayName: 'Validate Source Code'
+
+    # Is stage mein ek job execute hogi.
+    jobs:
+      - job: ValidateSource
+        displayName: 'Validate Angular and .NET'
+
+        steps:
+          # GitHub repository ka source code agent par checkout karo.
+          # clean: true purane checkout workspace ko clean karta hai.
+          - checkout: self
+            clean: true
+
+          # Bash script execute karo.
+          - bash: |
+              # Kisi command mein error aaye toh script fail ho.
+              set -euo pipefail
+
+              # Agent par installed tools ki versions check karo.
+              git --version
+              docker --version
+              node --version
+              npm --version
+              dotnet --version
+
+              # Build.SourcesDirectory Azure DevOps ka predefined variable hai.
+              # Ye checked-out source code ka local path deta hai.
+              echo "Repository path: $(Build.SourcesDirectory)"
+
+              # Angular package.json aur Dockerfile exist karne chahiye.
+              test -f "$(Build.SourcesDirectory)/$(frontendPath)/package.json"
+              test -f "$(Build.SourcesDirectory)/$(frontendPath)/Dockerfile"
+
+              # .NET project file aur Dockerfile exist karne chahiye.
+              test -f "$(Build.SourcesDirectory)/$(backendPath)/StudentAPI.csproj"
+              test -f "$(Build.SourcesDirectory)/$(backendPath)/Dockerfile"
+
+              # Sab checks pass hone par success message print karo.
+              echo "Source validation successful."
+
+            # Azure DevOps UI mein step ka naam.
+            displayName: 'Verify agent and repository structure'
+
+  # Doosra stage: application build aur tests.
+  - stage: Build
+    displayName: 'Build and Test Applications'
+
+    # Validate stage successful hone ke baad hi build chalao.
+    dependsOn: Validate
+
+    jobs:
+
+      # Angular ke liye separate job.
+      - job: BuildAngular
+        displayName: 'Build Angular'
+
+        steps:
+          # Is job ke liye repository checkout karo.
+          - checkout: self
+
+          # Angular build commands execute karo.
+          - bash: |
+              # Error par build fail karo.
+              set -euo pipefail
+
+              # Angular application directory mein jao.
+              cd "$(Build.SourcesDirectory)/$(frontendPath)"
+
+              # package-lock.json ke according dependencies install karo.
+              npm ci
+
+              # package.json mein defined build script execute karo.
+              npm run build
+
+            displayName: 'Install dependencies and build Angular'
+
+      # .NET API ke liye separate job.
+      - job: BuildDotNet
+        displayName: 'Build .NET API'
+
+        steps:
+          # Is job ke liye repository checkout karo.
+          - checkout: self
+
+          # .NET restore, build aur tests execute karo.
+          - bash: |
+              # Kisi command mein error aaye toh fail karo.
+              set -euo pipefail
+
+              # .NET project directory mein jao.
+              cd "$(Build.SourcesDirectory)/$(backendPath)"
+
+              # NuGet dependencies restore karo.
+              dotnet restore StudentAPI.csproj
+
+              # Release configuration mein application compile karo.
+              # --no-restore dobara dependencies restore hone se rokta hai.
+              dotnet build StudentAPI.csproj \
+                --configuration Release \
+                --no-restore
+
+              # Tests execute karo.
+              # --no-build previously compiled output use karta hai.
+              dotnet test StudentAPI.csproj \
+                --configuration Release \
+                --no-build
+
+            displayName: 'Restore, build and test .NET API'

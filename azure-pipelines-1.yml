@@ -1,196 +1,229 @@
 
-# Trigger pipeline when changes are pushed to the main branch Afiyaaaaaaaaaaaaaaaaaaaaaaaa
+# ============================================================
+# Azure DevOps CI Pipeline - Afiya
+# Application: Angular Frontend + .NET 8 API
+# Container Registry: Quay.io
+# Agent Pool: OpenShiftSA
+# ============================================================
+
+# Trigger pipeline when changes are pushed to main
 trigger:
   branches:
     include:
       - main
 
-# Disable automatic pull-request pipeline runs for now
+# Disable automatic pull-request runs for now
 pr: none
 
-# Use the existing Azure DevOps self-hosted agent pool
+# Use the existing self-hosted agent pool
 pool:
   name: OpenShiftSA
 
-# Centralized configuration for reusable paths
+# ============================================================
+# PIPELINE VARIABLES
+# ============================================================
 variables:
-  # Relative path of the Angular frontend from the repository root
+  # Angular frontend directory relative to repository root
   - name: frontendPath
     value: 'student-app'
 
-  # Relative path of the .NET API from the repository root
+  # .NET API directory relative to repository root
   - name: backendPath
     value: 'StudentAPI/StudentAPI/StudentAPI'
 
-  # Configuration used by the .NET build
+  # Build configuration
   - name: buildConfiguration
     value: 'Release'
 
-# Define pipeline stages
+  # Quay.io image repositories
+  - name: frontendImage
+    value: 'quay.io/afiyamulla/studentapp'
+
+  - name: apiImage
+    value: 'quay.io/afiyamulla/studentapi'
+
+# ============================================================
+# STAGE 1: VALIDATE SOURCE CODE AND AGENT
+# ============================================================
 stages:
   - stage: Validate
     displayName: 'Validate Source Code'
-
     jobs:
       - job: ValidateSource
         displayName: 'Validate Repository and Tools'
-
         steps:
-          # Download the repository onto the agent
+          # Checkout source code
           - checkout: self
             clean: true
 
-          # Verify required tools and application paths
+          # Verify required tools and source files
           - bash: |
               set -euo pipefail
 
+              echo "Checking installed tools..."
               git --version
               docker --version
               node --version
               npm --version
               dotnet --version
 
-              # Build.SourcesDirectory is predefined by Azure DevOps
               echo "Repository root: $(Build.SourcesDirectory)"
 
-              # Validate frontend files
+              echo "Checking Angular files..."
               test -f "$(Build.SourcesDirectory)/$(frontendPath)/package.json"
               test -f "$(Build.SourcesDirectory)/$(frontendPath)/Dockerfile"
 
-              # Validate backend files
+              echo "Checking .NET API files..."
               test -f "$(Build.SourcesDirectory)/$(backendPath)/StudentAPI.csproj"
               test -f "$(Build.SourcesDirectory)/$(backendPath)/Dockerfile"
 
-              echo "Repository validation successful."
-            displayName: 'Check tools and application paths'
+              echo "Source validation successful."
+            displayName: 'Verify Agent and Repository Structure'
 
+# ============================================================
+# STAGE 2: BUILD AND TEST APPLICATIONS
+# ============================================================
   - stage: Build
     displayName: 'Build and Test Applications'
     dependsOn: Validate
 
     jobs:
-      # Build the Angular frontend
+      # ------------------------------------------------------
+      # Job 1: Build Angular frontend
+      # ------------------------------------------------------
       - job: BuildAngular
         displayName: 'Build Angular Frontend'
-
         steps:
           - checkout: self
 
           - bash: |
               set -euo pipefail
 
-              # Move to the frontend directory
               cd "$(Build.SourcesDirectory)/$(frontendPath)"
 
-              # Install dependencies from the lock file
+              echo "Installing Angular dependencies..."
               npm ci
 
-              # Build the Angular application
+              echo "Building Angular application..."
               npm run build
-            displayName: 'Install dependencies and build Angular'
 
-      # Build and test the .NET API
+              echo "Angular build successful."
+            displayName: 'Install Dependencies and Build Angular'
+
+      # ------------------------------------------------------
+      # Job 2: Build and test .NET API
+      # ------------------------------------------------------
       - job: BuildDotNet
         displayName: 'Build .NET API'
-
         steps:
           - checkout: self
 
           - bash: |
               set -euo pipefail
 
-              # Move to the backend directory
               cd "$(Build.SourcesDirectory)/$(backendPath)"
 
-              # Restore NuGet dependencies
+              echo "Restoring NuGet packages..."
               dotnet restore StudentAPI.csproj
 
-              # Compile the application in Release configuration
+              echo "Building .NET API..."
               dotnet build StudentAPI.csproj \
                 --configuration "$(buildConfiguration)" \
                 --no-restore
 
-              # Run tests available in this project
+              echo "Running configured tests..."
               dotnet test StudentAPI.csproj \
                 --configuration "$(buildConfiguration)" \
                 --no-build
-            displayName: 'Restore, build and test .NET API'
 
+              echo ".NET build and test successful."
+            displayName: 'Restore, Build and Test .NET API'
 
-            
-  # Build Docker images and push them to Quay.io
+# ============================================================
+# STAGE 3: BUILD DOCKER IMAGES AND PUSH TO QUAY.IO
+# ============================================================
   - stage: DockerBuildAndPush
     displayName: 'Build and Push Docker Images'
     dependsOn: Build
-
-    # Run only when the previous Build stage succeeds
     condition: succeeded()
 
     jobs:
       - job: BuildAndPushImages
         displayName: 'Build and Push Frontend and API Images'
-
         steps:
-          # Checkout the same GitHub repository
+          # Checkout source code
           - checkout: self
             clean: true
 
-          # Authenticate to Quay.io using secret pipeline variables
-          - bash: |
-              set -euo pipefail
-
-              echo "$QUAY_PASSWORD" | docker login quay.io \
-                --username "$QUAY_USERNAME" \
-                --password-stdin
+          # --------------------------------------------------
+          # Authenticate using existing QuaySC service connection
+          # --------------------------------------------------
+          - task: Docker@2
             displayName: 'Login to Quay.io'
-            env:
-              QUAY_USERNAME: $(QUAY_USERNAME)
-              QUAY_PASSWORD: $(QUAY_PASSWORD)
+            inputs:
+              command: login
+              containerRegistry: 'QuaySC'
 
-          # Build the Angular frontend Docker image
+          # --------------------------------------------------
+          # Build Angular frontend Docker image
+          # --------------------------------------------------
           - bash: |
               set -euo pipefail
 
-              FRONTEND_IMAGE="quay.io/afiyamulla/studentapp:$(Build.BuildId)"
+              FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
+
+              echo "Building frontend image..."
 
               docker build \
                 --pull \
                 --tag "$FRONTEND_IMAGE" \
                 "$(Build.SourcesDirectory)/$(frontendPath)"
 
-              echo "Frontend image built: $FRONTEND_IMAGE"
+              echo "Frontend image built successfully."
+              echo "Image: $FRONTEND_IMAGE"
             displayName: 'Build Angular Docker Image'
 
-          # Build the .NET API Docker image
+          # --------------------------------------------------
+          # Build .NET API Docker image
+          # --------------------------------------------------
           - bash: |
               set -euo pipefail
 
-              API_IMAGE="quay.io/afiyamulla/studentapi:$(Build.BuildId)"
+              API_IMAGE="$(apiImage):$(Build.BuildId)"
+
+              echo "Building API image..."
 
               docker build \
                 --pull \
                 --tag "$API_IMAGE" \
                 "$(Build.SourcesDirectory)/$(backendPath)"
 
-              echo "API image built: $API_IMAGE"
+              echo ".NET API image built successfully."
+              echo "Image: $API_IMAGE"
             displayName: 'Build .NET API Docker Image'
 
-          # Push both images using the unique Azure DevOps Build ID
+          # --------------------------------------------------
+          # Push Angular and API images to Quay.io
+          # --------------------------------------------------
           - bash: |
               set -euo pipefail
 
-              FRONTEND_IMAGE="quay.io/afiyamulla/studentapp:$(Build.BuildId)"
-              API_IMAGE="quay.io/afiyamulla/studentapi:$(Build.BuildId)"
+              FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
+              API_IMAGE="$(apiImage):$(Build.BuildId)"
 
+              echo "Pushing Angular image..."
               docker push "$FRONTEND_IMAGE"
+
+              echo "Pushing .NET API image..."
               docker push "$API_IMAGE"
 
-              echo "Both Docker images pushed successfully."
-            displayName: 'Push Images to Quay.io'
+              echo "Both images pushed successfully."
+            displayName: 'Push Docker Images to Quay.io'
 
-          # Remove local registry authentication after the push
+          # --------------------------------------------------
+          # Remove registry authentication after the push
+          # --------------------------------------------------
           - bash: |
               docker logout quay.io || true
             displayName: 'Logout from Quay.io'
             condition: always()
-

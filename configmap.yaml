@@ -1,16 +1,12 @@
 apiVersion: v1
 kind: ConfigMap
-
 metadata:
-  name: student-config
-  namespace: student
-
+  name: eduadmin-config
 data:
-
-  ASPNETCORE_ENVIRONMENT: "Development"
-
-  DB_SERVER: "192.168.1.102"
-
+  ASPNETCORE_ENVIRONMENT: "Production"
+  ASPNETCORE_URLS: "http://+:8080"
+  # Replace these values with the actual database endpoint/name.
+  DB_HOST: "REPLACE_WITH_DATABASE_HOST"
   DB_PORT: "1433"
-
-  DB_NAME: "StudentDB"
+  DB_NAME: "REPLACE_WITH_DATABASE_NAME"
+  # Configure the frontend API URL in the Angular build/runtime config as required.

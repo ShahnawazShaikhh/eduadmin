@@ -1,0 +1,7 @@
+# deployment resources ki list maintain karegi.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Resources managed by our deployment pipeline
+resources:
+  - namespace.yaml

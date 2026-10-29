@@ -1,273 +1,209 @@
 # ============================================================
-# Azure DevOps CI Pipeline - Afiya
-# Application: Angular Frontend + .NET 8 API
-# Container Registry: Quay.io
+# Azure DevOps CI/CD Pipeline - EduAdmin
+# Angular Frontend + .NET 8 API -> Quay.io -> OpenShift CRC
 # Agent Pool: OpenShiftSA
+# Service connections: QuaySC, OpenShiftSC
 # ============================================================
 
-# Trigger pipeline when changes are pushed to main
 trigger:
   branches:
     include:
       - main
 
-# Disable automatic pull-request runs for now
 pr: none
 
-# Use the existing self-hosted agent pool
 pool:
   name: OpenShiftSA
 
-# ============================================================
-# PIPELINE VARIABLES
-# ============================================================
 variables:
-  # Angular frontend directory relative to repository root
-  - name: frontendPath
-    value: 'student-app'
+  frontendPath: 'student-app'
+  backendPath: 'StudentAPI/StudentAPI/StudentAPI'
+  buildConfiguration: 'Release'
+  frontendImage: 'quay.io/afiyamulla/studentapp'
+  apiImage: 'quay.io/afiyamulla/studentapi'
+  openshiftProject: 'eduadmin-dev'
+  remoteManifestPath: '/tmp/eduadmin-openshift/$(Build.BuildId)'
 
-  # .NET API directory relative to repository root
-  - name: backendPath
-    value: 'StudentAPI/StudentAPI/StudentAPI'
-
-  # Build configuration
-  - name: buildConfiguration
-    value: 'Release'
-
-  # Quay.io image repositories
-  - name: frontendImage
-    value: 'quay.io/afiyamulla/studentapp'
-
-  - name: apiImage
-    value: 'quay.io/afiyamulla/studentapi'
-
-# ============================================================
-# STAGE 1: VALIDATE SOURCE CODE AND AGENT
-# ============================================================
 stages:
-  - stage: Validate
-    displayName: 'Validate Source Code'
-    jobs:
-      - job: ValidateSource
-        displayName: 'Validate Repository and Tools'
-        steps:
-          # Checkout source code
-          - checkout: self
-            clean: true
+# ============================================================
+# STAGE 1: VALIDATE REPOSITORY AND AGENT
+# ============================================================
+- stage: Validate
+  displayName: 'Validate Source and Agent'
+  jobs:
+  - job: ValidateSource
+    displayName: 'Validate Repository and Tools'
+    steps:
+    - checkout: self
+      clean: true
 
-          # Verify required tools and source files
-          - bash: |
-              set -euo pipefail
+    - bash: |
+        set -euo pipefail
 
-              echo "Checking installed tools..."
-              git --version
-              docker --version
-              node --version
-              npm --version
-              dotnet --version
+        echo "Checking tools..."
+        git --version
+        docker --version
+        node --version
+        npm --version
+        dotnet --version
 
-              echo "Repository root: $(Build.SourcesDirectory)"
+        echo "Checking source files..."
+        test -f "$(Build.SourcesDirectory)/$(frontendPath)/package.json"
+        test -f "$(Build.SourcesDirectory)/$(frontendPath)/Dockerfile"
+        test -f "$(Build.SourcesDirectory)/$(backendPath)/StudentAPI.csproj"
+        test -f "$(Build.SourcesDirectory)/$(backendPath)/Dockerfile"
 
-              echo "Checking Angular files..."
-              test -f "$(Build.SourcesDirectory)/$(frontendPath)/package.json"
-              test -f "$(Build.SourcesDirectory)/$(frontendPath)/Dockerfile"
+        echo "Checking OpenShift manifests..."
+        test -f "$(Build.SourcesDirectory)/openshift/bootstrap/namespace.yaml"
+        test -f "$(Build.SourcesDirectory)/openshift/app/kustomization.yaml"
+        test -f "$(Build.SourcesDirectory)/openshift/app/configmap.yaml"
+        test -f "$(Build.SourcesDirectory)/openshift/app/frontend-deployment.yaml"
+        test -f "$(Build.SourcesDirectory)/openshift/app/api-deployment.yaml"
 
-              echo "Checking .NET API files..."
-              test -f "$(Build.SourcesDirectory)/$(backendPath)/StudentAPI.csproj"
-              test -f "$(Build.SourcesDirectory)/$(backendPath)/Dockerfile"
+        echo "Validation passed."
+      displayName: 'Validate Tools and Repository Structure'
 
-              echo "Source validation successful."
-            displayName: 'Verify Agent and Repository Structure'
+# ============================================================
+# STAGE 2: BUILD AND TEST
+# ============================================================
+- stage: Build
+  displayName: 'Build and Test Applications'
+  dependsOn: Validate
+  jobs:
+  - job: BuildAngular
+    displayName: 'Build Angular Frontend'
+    steps:
+    - checkout: self
+    - bash: |
+        set -euo pipefail
+        cd "$(Build.SourcesDirectory)/$(frontendPath)"
+        npm ci
+        npm run build
+      displayName: 'Install Dependencies and Build Angular'
 
-  # ============================================================
-  # STAGE 2: BUILD AND TEST APPLICATIONS
-  # ============================================================
-  - stage: Build
-    displayName: 'Build and Test Applications'
-    dependsOn: Validate
+  - job: BuildDotNet
+    displayName: 'Build and Test .NET API'
+    steps:
+    - checkout: self
+    - bash: |
+        set -euo pipefail
+        cd "$(Build.SourcesDirectory)/$(backendPath)"
+        dotnet restore StudentAPI.csproj
+        dotnet build StudentAPI.csproj \
+          --configuration "$(buildConfiguration)" \
+          --no-restore
+        dotnet test StudentAPI.csproj \
+          --configuration "$(buildConfiguration)" \
+          --no-build
+      displayName: 'Restore, Build and Test .NET API'
 
-    jobs:
-      # ------------------------------------------------------
-      # Job 1: Build Angular frontend
-      # ------------------------------------------------------
-      - job: BuildAngular
-        displayName: 'Build Angular Frontend'
-        steps:
-          - checkout: self
+# ============================================================
+# STAGE 3: BUILD AND PUSH CONTAINER IMAGES
+# ============================================================
+- stage: DockerBuildAndPush
+  displayName: 'Build and Push Images to Quay'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: BuildAndPushImages
+    displayName: 'Build and Push Frontend and API'
+    steps:
+    - checkout: self
+      clean: true
 
-          - bash: |
-              set -euo pipefail
+    - task: Docker@2
+      displayName: 'Login to Quay.io'
+      inputs:
+        command: login
+        containerRegistry: 'QuaySC'
 
-              cd "$(Build.SourcesDirectory)/$(frontendPath)"
+    - bash: |
+        set -euo pipefail
+        FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
+        docker build --pull \
+          --tag "$FRONTEND_IMAGE" \
+          "$(Build.SourcesDirectory)/$(frontendPath)"
+        docker push "$FRONTEND_IMAGE"
+        echo "Frontend image pushed: $FRONTEND_IMAGE"
+      displayName: 'Build and Push Angular Image'
 
-              echo "Installing Angular dependencies..."
-              npm ci
+    - bash: |
+        set -euo pipefail
+        API_IMAGE="$(apiImage):$(Build.BuildId)"
+        docker build --pull \
+          --tag "$API_IMAGE" \
+          "$(Build.SourcesDirectory)/$(backendPath)"
+        docker push "$API_IMAGE"
+        echo "API image pushed: $API_IMAGE"
+      displayName: 'Build and Push .NET API Image'
 
-              echo "Building Angular application..."
-              npm run build
+    - bash: |
+        docker logout quay.io || true
+      displayName: 'Logout from Quay.io'
+      condition: always()
 
-              echo "Angular build successful."
-            displayName: 'Install Dependencies and Build Angular'
+# ============================================================
+# STAGE 4: DEPLOY TO OPENSHIFT CRC
+# ============================================================
+- stage: OpenShiftDeploy
+  displayName: 'Deploy to OpenShift CRC'
+  dependsOn: DockerBuildAndPush
+  condition: succeeded()
+  jobs:
+  - job: Deploy
+    displayName: 'Deploy manifests using Kustomize'
+    steps:
+    - checkout: self
+      clean: true
 
-      # ------------------------------------------------------
-      # Job 2: Build and test .NET API
-      # ------------------------------------------------------
-      - job: BuildDotNet
-        displayName: 'Build .NET API'
-        steps:
-          - checkout: self
+    # Copy the complete openshift directory to the CRC server.
+    - task: CopyFilesOverSSH@0
+      displayName: 'Copy OpenShift Manifests to CRC Server'
+      inputs:
+        sshEndpoint: 'OpenShifSC'
+        sourceFolder: '$(Build.SourcesDirectory)/openshift'
+        contents: '**'
+        targetFolder: '$(remoteManifestPath)'
+        cleanTargetFolder: true
+        overwrite: true
 
-          - bash: |
-              set -euo pipefail
+    # SSH task executes commands on the CRC server.
+    - task: SSH@0
+      displayName: 'Apply Project and Deploy with Kustomize'
+      inputs:
+        sshEndpoint: 'OpenShifSC'
+        runOptions: 'inline'
+        inline: |
+          set -eu
 
-              cd "$(Build.SourcesDirectory)/$(backendPath)"
+          echo "Checking OpenShift login..."
+          oc whoami
+          oc whoami --show-server
 
-              echo "Restoring NuGet packages..."
-              dotnet restore StudentAPI.csproj
+          echo "Creating/updating OpenShift project..."
+          oc apply -f "$(remoteManifestPath)/bootstrap/namespace.yaml"
 
-              echo "Building .NET API..."
-              dotnet build StudentAPI.csproj \
-                --configuration "$(buildConfiguration)" \
-                --no-restore
+          echo "Checking required API secret..."
+          if ! oc -n "$(openshiftProject)" get secret studentapi-secret >/dev/null 2>&1; then
+            echo "ERROR: Secret studentapi-secret is missing in project $(openshiftProject)."
+            echo "Create it securely before deployment. Do not commit credentials to Git."
+            exit 1
+          fi
 
-              echo "Running configured tests..."
-              dotnet test StudentAPI.csproj \
-                --configuration "$(buildConfiguration)" \
-                --no-build
+          echo "Setting image tags for this build..."
+          sed -i "s/__IMAGE_TAG__/$(Build.BuildId)/g" "$(remoteManifestPath)/app/kustomization.yaml"
 
-              echo ".NET build and test successful."
-            displayName: 'Restore, Build and Test .NET API'
+          echo "Applying all app resources through Kustomize..."
+          oc apply -k "$(remoteManifestPath)/app/" -n "$(openshiftProject)"
 
-  # ============================================================
-  # STAGE 3: BUILD DOCKER IMAGES AND PUSH TO QUAY.IO
-  # ============================================================
-  - stage: DockerBuildAndPush
-    displayName: 'Build and Push Docker Images'
-    dependsOn: Build
-    condition: succeeded()
+          echo "Waiting for frontend rollout..."
+          oc rollout status deployment/studentapp \
+            -n "$(openshiftProject)" --timeout=180s
 
-    jobs:
-      - job: BuildAndPushImages
-        displayName: 'Build and Push Frontend and API Images'
-        steps:
-          # Checkout source code
-          - checkout: self
-            clean: true
+          echo "Waiting for API rollout..."
+          oc rollout status deployment/studentapi \
+            -n "$(openshiftProject)" --timeout=180s
 
-          # --------------------------------------------------
-          # Authenticate using existing QuaySC service connection
-          # --------------------------------------------------
-          - task: Docker@2
-            displayName: 'Login to Quay.io'
-            inputs:
-              command: login
-              containerRegistry: 'QuaySC'
-
-          # --------------------------------------------------
-          # Build Angular frontend Docker image
-          # --------------------------------------------------
-          - bash: |
-              set -euo pipefail
-
-              FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
-
-              echo "Building frontend image..."
-
-              docker build \
-                --pull \
-                --tag "$FRONTEND_IMAGE" \
-                "$(Build.SourcesDirectory)/$(frontendPath)"
-
-              echo "Frontend image built successfully."
-              echo "Image: $FRONTEND_IMAGE"
-            displayName: 'Build Angular Docker Image'
-
-          # --------------------------------------------------
-          # Build .NET API Docker image
-          # --------------------------------------------------
-          - bash: |
-              set -euo pipefail
-
-              API_IMAGE="$(apiImage):$(Build.BuildId)"
-
-              echo "Building API image..."
-
-              docker build \
-                --pull \
-                --tag "$API_IMAGE" \
-                "$(Build.SourcesDirectory)/$(backendPath)"
-
-              echo ".NET API image built successfully."
-              echo "Image: $API_IMAGE"
-            displayName: 'Build .NET API Docker Image'
-
-          # --------------------------------------------------
-          # Push Angular and API images to Quay.io
-          # --------------------------------------------------
-          - bash: |
-              set -euo pipefail
-
-              FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
-              API_IMAGE="$(apiImage):$(Build.BuildId)"
-
-              echo "Pushing Angular image..."
-              docker push "$FRONTEND_IMAGE"
-
-              echo "Pushing .NET API image..."
-              docker push "$API_IMAGE"
-
-              echo "Both images pushed successfully."
-            displayName: 'Push Docker Images to Quay.io'
-
-          # --------------------------------------------------
-          # Remove registry authentication after the push
-          # --------------------------------------------------
-          - bash: |
-              docker logout quay.io || true
-            displayName: 'Logout from Quay.io'
-            condition: always()
-
-  - stage: OpenShiftConnectionTest
-    displayName: Test OpenShift Server Connection
-    dependsOn: DockerBuildAndPush
-    condition: succeeded()
-    jobs:
-      - job: SSHTest
-        steps:
-          - task: SSH@0
-            displayName: Connect to OpenShift CRC Server
-            inputs:
-              sshEndpoint: 'OpenShifSC'
-              runOptions: 'inline' # ← change this too
-              inline: |
-                set -euo pipefail
-                hostname
-                whoami
-                oc whoami --show-server || true
-                crc status || true
-
-  - stage: OpenShiftDeploy
-    displayName: Deploy to OpenShift
-    dependsOn: OpenShiftConnectionTest # recommended
-    condition: succeeded()
-    jobs:
-          - job: CreateProject
-            displayName: Create OpenShift Project
-            steps:
-              - task: SSH@0
-                displayName: Create eduadmin-dev Project
-                inputs:
-                  sshEndpoint: 'OpenShifSC'
-                  runOptions: 'inline' # ← MUST be inline
-                  inline: |
-                    set -euo pipefail
-
-                    if oc get project eduadmin-dev >/dev/null 2>&1; then
-                      echo "Project eduadmin-dev already exists"
-                    else
-                      echo "Creating project eduadmin-dev..."
-                      oc new-project eduadmin-dev
-                    fi
-
-                    oc project eduadmin-dev
-                    echo "Current project is: $(oc project -q)"
+          echo "Final deployment status:"
+          oc get deployments,pods,services,routes \
+            -n "$(openshiftProject)"

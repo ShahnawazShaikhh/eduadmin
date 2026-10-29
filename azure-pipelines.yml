@@ -488,7 +488,12 @@ stages:
           oc whoami
           oc whoami --show-server
           echo "========== Create or Update Project =========="
-          oc apply -f "$MANIFEST/bootstrap/namespace.yaml"
+          # Safely create or update project without triggering immutable field errors
+          if ! oc get project "$PROJECT" >/dev/null 2>&1; then
+            oc apply -f "$MANIFEST/bootstrap/namespace.yaml"
+          else
+            echo "Project $PROJECT already exists. Ensuring annotations/labels or skipping immutable create."
+          fi
           echo "========== Validate Required Secret =========="
           if ! oc get secret studentapi-secret \
             -n "$PROJECT" >/dev/null 2>&1; then

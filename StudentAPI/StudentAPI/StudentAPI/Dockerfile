@@ -22,7 +22,7 @@
 
 # EXPOSE 5000
 
-ENTRYPOINT ["dotnet","StudentAPI.dll"]
+# ENTRYPOINT ["dotnet","StudentAPI.dll"]
 
 
 

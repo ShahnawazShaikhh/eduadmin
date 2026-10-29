@@ -1,96 +1,240 @@
+
+# ============================================================
+# Azure DevOps CI/CD Pipeline - EduAdmin (Optimized)
+# ============================================================
 trigger:
-  - main
+  branches:
+    include:
+      - main
+pr: none
 
 pool:
-  name: Default
+  name: OpenShiftSA
 
 variables:
-  buildConfiguration: Release
-  frontendRepository: afiyamulla/studentapp
-  backendRepository: afiyamulla/studentapi
+  frontendPath: 'student-app'
+  backendPath: 'StudentAPI/StudentAPI/StudentAPI'
+  buildConfiguration: 'Release'
+  frontendImage: 'quay.io/afiyamulla/studentapp'
+  apiImage: 'quay.io/afiyamulla/studentapi'
+  openshiftProject: 'eduadmin-dev'
+  # Cache keys
+  npmCacheKey: 'npm | "$(Agent.OS)" | student-app/package-lock.json'
+  nugetCacheKey: 'nuget | "$(Agent.OS)" | **/packages.lock.json'
 
-steps:
-  - checkout: self
-    displayName: Checkout GitHub Repository
+stages:
 
-  - task: UseDotNet@2
-    displayName: Install .NET 8 SDK
-    inputs:
-      packageType: sdk
-      version: '8.0.x'
+# ------------------------------------------------------------
+# STAGE 1: VALIDATE (lightweight)
+# ------------------------------------------------------------
+- stage: Validate
+  displayName: 'Validate'
+  jobs:
+  - job: Validate
+    displayName: 'Validate Source & Tools'
+    steps:
+    - checkout: self
+      clean: false                    # clean hata diya
+      fetchDepth: 1                   # shallow clone = faster
 
-  - task: NodeTool@0
-    displayName: Install Node.js 22
-    inputs:
-      versionSpec: '22.x'
+    - bash: |
+        set -euo pipefail
+        echo "Tools check..."
+        docker --version
+        node --version
+        npm --version
+        dotnet --version
+        oc version --client || true
 
-  - script: |
-      set -eu
-      echo "===== VERIFY TOOLS ====="
-      git --version
-      dotnet --version
-      node --version
-      npm --version
-      docker --version
-      docker info
-    displayName: Verify Build Environment
+        echo "Source check..."
+        test -f "$(Build.SourcesDirectory)/$(frontendPath)/package.json"
+        test -f "$(Build.SourcesDirectory)/$(frontendPath)/Dockerfile"
+        test -f "$(Build.SourcesDirectory)/$(backendPath)/StudentAPI.csproj"
+        test -f "$(Build.SourcesDirectory)/$(backendPath)/Dockerfile"
+        test -f "$(Build.SourcesDirectory)/openshift/app/kustomization.yaml"
+        echo "Validation passed."
+      displayName: 'Quick Validate'
 
-  - script: |
-      set -eu
-      API_DIR="$(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI"
-      PROJECT="$API_DIR/StudentAPI.csproj"
+# ------------------------------------------------------------
+# STAGE 2: BUILD + TEST (Parallel + Cache)
+# ------------------------------------------------------------
+- stage: Build
+  displayName: 'Build & Test'
+  dependsOn: Validate
+  jobs:
 
-      test -f "$PROJECT"
+  # ---------- Angular ----------
+  - job: BuildAngular
+    displayName: 'Angular'
+    steps:
+    - checkout: self
+      fetchDepth: 1
 
-      echo "===== RESTORE .NET DEPENDENCIES ====="
-      dotnet restore "$PROJECT"
+    - task: Cache@2
+      displayName: 'Cache npm'
+      inputs:
+        key: '$(npmCacheKey)'
+        restoreKeys: |
+          npm | "$(Agent.OS)"
+        path: $(Pipeline.Workspace)/.npm
 
-      echo "===== BUILD .NET API ====="
-      dotnet build "$PROJECT" --configuration "$(buildConfiguration)" --no-restore
-    displayName: Build StudentAPI
+    - bash: |
+        set -euo pipefail
+        cd "$(Build.SourcesDirectory)/$(frontendPath)"
+        npm ci --cache $(Pipeline.Workspace)/.npm --prefer-offline
+        npm run build
+      displayName: 'npm ci + build'
 
-  - script: |
-      set -eu
-      FRONTEND_DIR="$(Build.SourcesDirectory)/student-app"
+  # ---------- .NET ----------
+  - job: BuildDotNet
+    displayName: '.NET API'
+    steps:
+    - checkout: self
+      fetchDepth: 1
 
-      test -f "$FRONTEND_DIR/package.json"
-      test -f "$FRONTEND_DIR/package-lock.json"
+    - task: Cache@2
+      displayName: 'Cache NuGet'
+      inputs:
+        key: '$(nugetCacheKey)'
+        restoreKeys: |
+          nuget | "$(Agent.OS)"
+        path: $(Pipeline.Workspace)/.nuget
 
-      cd "$FRONTEND_DIR"
+    - bash: |
+        set -euo pipefail
+        cd "$(Build.SourcesDirectory)/$(backendPath)"
+        export NUGET_PACKAGES=$(Pipeline.Workspace)/.nuget
+        dotnet restore StudentAPI.csproj --packages $NUGET_PACKAGES
+        dotnet build StudentAPI.csproj -c $(buildConfiguration) --no-restore
+        dotnet test  StudentAPI.csproj -c $(buildConfiguration) --no-build --verbosity minimal
+      displayName: 'Restore + Build + Test'
 
-      echo "===== INSTALL ANGULAR DEPENDENCIES ====="
-      npm ci
+# ------------------------------------------------------------
+# STAGE 3: DOCKER BUILD + PUSH (Parallel images)
+# ------------------------------------------------------------
+- stage: Docker
+  displayName: 'Docker Build & Push'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: BuildPush
+    displayName: 'Build & Push Images'
+    steps:
+    - checkout: self
+      fetchDepth: 1
+      clean: false
 
-      echo "===== BUILD ANGULAR FRONTEND ====="
-      npm run build
-    displayName: Build StudentApp
+    - task: Docker@2
+      displayName: 'Login Quay.io'
+      inputs:
+        command: login
+        containerRegistry: 'QuaySC'
 
-  - task: Docker@2
-    displayName: Build and Push StudentApp to Quay.io
-    inputs:
-      command: buildAndPush
-      containerRegistry: QuaySC
-      repository: $(frontendRepository)
-      Dockerfile: $(Build.SourcesDirectory)/student-app/Dockerfile
-      buildContext: $(Build.SourcesDirectory)/student-app
-      tags: |
-        $(Build.BuildId)
+    # Build both images in parallel using background processes
+    - bash: |
+        set -euo pipefail
 
-  - task: Docker@2
-    displayName: Build and Push StudentAPI to Quay.io
-    inputs:
-      command: buildAndPush
-      containerRegistry: QuaySC
-      repository: $(backendRepository)
-      Dockerfile: $(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI/Dockerfile
-      buildContext: $(Build.SourcesDirectory)/StudentAPI/StudentAPI/StudentAPI
-      tags: |
-        $(Build.BuildId)
+        FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
+        API_IMAGE="$(apiImage):$(Build.BuildId)"
 
-  - script: |
-      echo "======================================"
-      echo "CI PIPELINE COMPLETED SUCCESSFULLY"
-      echo "Frontend: quay.io/$(frontendRepository):$(Build.BuildId)"
-      echo "Backend:  quay.io/$(backendRepository):$(Build.BuildId)"
-      echo "======================================"
-    displayName: Display Published Images
+        echo "Building Frontend & API images in parallel..."
+
+        # Frontend build in background
+        docker build --pull -t "$FRONTEND_IMAGE" \
+          "$(Build.SourcesDirectory)/$(frontendPath)" &
+        PID1=$!
+
+        # API build in background
+        docker build --pull -t "$API_IMAGE" \
+          "$(Build.SourcesDirectory)/$(backendPath)" &
+        PID2=$!
+
+        # Wait for both
+        wait $PID1
+        wait $PID2
+
+        echo "Pushing images..."
+        docker push "$FRONTEND_IMAGE" &
+        docker push "$API_IMAGE" &
+        wait
+
+        echo "Both images pushed successfully"
+        echo "Frontend → $FRONTEND_IMAGE"
+        echo "API      → $API_IMAGE"
+      displayName: 'Parallel Docker Build + Push'
+
+    - bash: docker logout quay.io || true
+      displayName: 'Logout'
+      condition: always()
+
+# ------------------------------------------------------------
+# STAGE 4: DEPLOY (Minimal + Fast)
+# ------------------------------------------------------------
+- stage: Deploy
+  displayName: 'Deploy to OpenShift'
+  dependsOn: Docker
+  condition: succeeded()
+  jobs:
+  - job: Deploy
+    displayName: 'Kustomize Deploy'
+    steps:
+    - checkout: self
+      fetchDepth: 1
+      clean: false
+
+    # Only copy the app folder (not whole openshift tree)
+    - task: CopyFilesOverSSH@0
+      displayName: 'Copy manifests'
+      inputs:
+        sshEndpoint: 'OpenShifSC'
+        sourceFolder: '$(Build.SourcesDirectory)/openshift'
+        contents: |
+          bootstrap/**
+          app/**
+        targetFolder: '/tmp/eduadmin-$(Build.BuildId)'
+        cleanTargetFolder: true
+        overwrite: true
+
+    - task: SSH@0
+      displayName: 'Apply + Rollout'
+      inputs:
+        sshEndpoint: 'OpenShifSC'
+        runOptions: inline
+        inline: |
+          set -euo pipefail
+
+          PROJECT="$(openshiftProject)"
+          MANIFEST="/tmp/eduadmin-$(Build.BuildId)"
+
+          echo "=== OpenShift Login Check ==="
+          oc whoami
+          oc whoami --show-server
+
+          echo "=== Ensure Project ==="
+          oc apply -f "$MANIFEST/bootstrap/namespace.yaml"
+
+          # Secret check (fail fast)
+          if ! oc -n "$PROJECT" get secret studentapi-secret >/dev/null 2>&1; then
+            echo "ERROR: studentapi-secret missing in $PROJECT"
+            exit 1
+          fi
+
+          echo "=== Set image tag $(Build.BuildId) ==="
+          sed -i "s/__IMAGE_TAG__/$(Build.BuildId)/g" "$MANIFEST/app/kustomization.yaml"
+
+          echo "=== Apply Kustomize ==="
+          oc apply -k "$MANIFEST/app/" -n "$PROJECT"
+
+          echo "=== Wait for rollouts ==="
+          oc rollout status deployment/studentapp -n "$PROJECT" --timeout=120s
+          oc rollout status deployment/studentapi -n "$PROJECT" --timeout=120s
+
+          echo "=== Final Status ==="
+          oc get deploy,pods,svc,route -n "$PROJECT"
+
+          # Cleanup old temp folder (optional)
+          rm -rf "$MANIFEST"
+
+
+
+

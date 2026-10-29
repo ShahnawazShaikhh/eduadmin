@@ -115,3 +115,82 @@ stages:
                 --configuration "$(buildConfiguration)" \
                 --no-build
             displayName: 'Restore, build and test .NET API'
+
+
+            
+  # Build Docker images and push them to Quay.io
+  - stage: DockerBuildAndPush
+    displayName: 'Build and Push Docker Images'
+    dependsOn: Build
+
+    # Run only when the previous Build stage succeeds
+    condition: succeeded()
+
+    jobs:
+      - job: BuildAndPushImages
+        displayName: 'Build and Push Frontend and API Images'
+
+        steps:
+          # Checkout the same GitHub repository
+          - checkout: self
+            clean: true
+
+          # Authenticate to Quay.io using secret pipeline variables
+          - bash: |
+              set -euo pipefail
+
+              echo "$QUAY_PASSWORD" | docker login quay.io \
+                --username "$QUAY_USERNAME" \
+                --password-stdin
+            displayName: 'Login to Quay.io'
+            env:
+              QUAY_USERNAME: $(QUAY_USERNAME)
+              QUAY_PASSWORD: $(QUAY_PASSWORD)
+
+          # Build the Angular frontend Docker image
+          - bash: |
+              set -euo pipefail
+
+              FRONTEND_IMAGE="quay.io/afiyamulla/studentapp:$(Build.BuildId)"
+
+              docker build \
+                --pull \
+                --tag "$FRONTEND_IMAGE" \
+                "$(Build.SourcesDirectory)/$(frontendPath)"
+
+              echo "Frontend image built: $FRONTEND_IMAGE"
+            displayName: 'Build Angular Docker Image'
+
+          # Build the .NET API Docker image
+          - bash: |
+              set -euo pipefail
+
+              API_IMAGE="quay.io/afiyamulla/studentapi:$(Build.BuildId)"
+
+              docker build \
+                --pull \
+                --tag "$API_IMAGE" \
+                "$(Build.SourcesDirectory)/$(backendPath)"
+
+              echo "API image built: $API_IMAGE"
+            displayName: 'Build .NET API Docker Image'
+
+          # Push both images using the unique Azure DevOps Build ID
+          - bash: |
+              set -euo pipefail
+
+              FRONTEND_IMAGE="quay.io/afiyamulla/studentapp:$(Build.BuildId)"
+              API_IMAGE="quay.io/afiyamulla/studentapi:$(Build.BuildId)"
+
+              docker push "$FRONTEND_IMAGE"
+              docker push "$API_IMAGE"
+
+              echo "Both Docker images pushed successfully."
+            displayName: 'Push Images to Quay.io'
+
+          # Remove local registry authentication after the push
+          - bash: |
+              docker logout quay.io || true
+            displayName: 'Logout from Quay.io'
+            condition: always()
+

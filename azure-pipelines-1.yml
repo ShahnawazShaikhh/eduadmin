@@ -1,4 +1,3 @@
-
 # ============================================================
 # Azure DevOps CI Pipeline - Afiya
 # Application: Angular Frontend + .NET 8 API
@@ -80,9 +79,9 @@ stages:
               echo "Source validation successful."
             displayName: 'Verify Agent and Repository Structure'
 
-# ============================================================
-# STAGE 2: BUILD AND TEST APPLICATIONS
-# ============================================================
+  # ============================================================
+  # STAGE 2: BUILD AND TEST APPLICATIONS
+  # ============================================================
   - stage: Build
     displayName: 'Build and Test Applications'
     dependsOn: Validate
@@ -139,9 +138,9 @@ stages:
               echo ".NET build and test successful."
             displayName: 'Restore, Build and Test .NET API'
 
-# ============================================================
-# STAGE 3: BUILD DOCKER IMAGES AND PUSH TO QUAY.IO
-# ============================================================
+  # ============================================================
+  # STAGE 3: BUILD DOCKER IMAGES AND PUSH TO QUAY.IO
+  # ============================================================
   - stage: DockerBuildAndPush
     displayName: 'Build and Push Docker Images'
     dependsOn: Build
@@ -230,37 +229,45 @@ stages:
 
   - stage: OpenShiftConnectionTest
     displayName: Test OpenShift Server Connection
-  
+    dependsOn: DockerBuildAndPush
+    condition: succeeded()
     jobs:
       - job: SSHTest
-        displayName: Test SSH Connectivity
-  
         steps:
           - task: SSH@0
             displayName: Connect to OpenShift CRC Server
             inputs:
               sshEndpoint: 'OpenShifSC'
-              runOptions: 'commands'
-              commands: |
+              runOptions: 'inline' # ← change this too
+              inline: |
+                set -euo pipefail
                 hostname
                 whoami
-                oc whoami --show-server
-                crc status
+                oc whoami --show-server || true
+                crc status || true
 
-                
   - stage: OpenShiftDeploy
     displayName: Deploy to OpenShift
-
+    dependsOn: OpenShiftConnectionTest # recommended
+    condition: succeeded()
     jobs:
-      - job: CreateProject
-        displayName: Create OpenShift Project
+          - job: CreateProject
+            displayName: Create OpenShift Project
+            steps:
+              - task: SSH@0
+                displayName: Create eduadmin-dev Project
+                inputs:
+                  sshEndpoint: 'OpenShifSC'
+                  runOptions: 'inline' # ← MUST be inline
+                  inline: |
+                    set -euo pipefail
 
-        steps:
-          - task: SSH@0
-            displayName: Create eduadmin-dev Project
-            inputs:
-              sshEndpoint: 'OpenShifSC'
-              runOptions: 'commands'
-              commands: |
-                if oc get project eduadmin-dev >/dev/null 2>&1; then echo "Project already exists"; else oc new-project eduadmin-dev; fi
-  
+                    if oc get project eduadmin-dev >/dev/null 2>&1; then
+                      echo "Project eduadmin-dev already exists"
+                    else
+                      echo "Creating project eduadmin-dev..."
+                      oc new-project eduadmin-dev
+                    fi
+
+                    oc project eduadmin-dev
+                    echo "Current project is: $(oc project -q)"

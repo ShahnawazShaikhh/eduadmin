@@ -1,99 +1,70 @@
-
 # ============================================================
 # Azure DevOps CI/CD Pipeline - EduAdmin
 # ============================================================
-
 trigger:
   branches:
     include:
       - main
-
 pr: none
-
 pool:
   name: OpenShiftSA
-
 variables:
   frontendPath: 'student-app'
   backendPath: 'StudentAPI/StudentAPI/StudentAPI'
   buildConfiguration: 'Release'
-
   frontendImage: 'quay.io/afiyamulla/studentapp'
   apiImage: 'quay.io/afiyamulla/studentapi'
-
   openshiftProject: 'eduadmin-dev'
-
   # Cache keys
   npmCacheKey: 'npm | "$(Agent.OS)" | student-app/package-lock.json'
   nugetCacheKey: 'nuget | "$(Agent.OS)" | $(backendPath)/StudentAPI.csproj'
 
-
 stages:
-
 # ============================================================
 # STAGE 1: VALIDATE
 # ============================================================
-
 - stage: Validate
   displayName: 'Validate Source and Tools'
-
   jobs:
   - job: Validate
     displayName: 'Quick Validation'
-
     steps:
     - checkout: self
       clean: false
       fetchDepth: 1
-
     - bash: |
         set -euo pipefail
-
         echo "========== Tools Check =========="
         docker --version
         node --version
         npm --version
         dotnet --version
-        oc version --client
-
         echo "========== Source Check =========="
-
         test -f "$(Build.SourcesDirectory)/$(frontendPath)/package.json"
         test -f "$(Build.SourcesDirectory)/$(frontendPath)/package-lock.json"
         test -f "$(Build.SourcesDirectory)/$(frontendPath)/Dockerfile"
-
         test -f "$(Build.SourcesDirectory)/$(backendPath)/StudentAPI.csproj"
         test -f "$(Build.SourcesDirectory)/$(backendPath)/Dockerfile"
-
         test -f "$(Build.SourcesDirectory)/openshift/bootstrap/namespace.yaml"
         test -f "$(Build.SourcesDirectory)/openshift/app/kustomization.yaml"
-
         echo "Validation passed."
       displayName: 'Validate Source and Tools'
 
-
 # ============================================================
 # STAGE 2: BUILD AND TEST
-# Angular and .NET jobs can run in parallel when agents allow.
 # ============================================================
-
 - stage: Build
   displayName: 'Build and Test'
   dependsOn: Validate
-
   jobs:
-
   # ----------------------------------------------------------
   # Angular Build
   # ----------------------------------------------------------
-
   - job: BuildAngular
     displayName: 'Build Angular Frontend'
-
     steps:
     - checkout: self
       fetchDepth: 1
-
     - task: Cache@2
       displayName: 'Cache npm Packages'
       inputs:
@@ -101,35 +72,26 @@ stages:
         restoreKeys: |
           npm | "$(Agent.OS)"
         path: '$(Pipeline.Workspace)/.npm'
-
     - bash: |
         set -euo pipefail
-
         cd "$(Build.SourcesDirectory)/$(frontendPath)"
-
         echo "========== Install Dependencies =========="
         npm ci \
           --cache "$(Pipeline.Workspace)/.npm" \
           --prefer-offline
-
         echo "========== Build Angular =========="
         npm run build
-
         echo "Angular build completed successfully."
       displayName: 'npm Install and Build'
-
 
   # ----------------------------------------------------------
   # .NET API Build
   # ----------------------------------------------------------
-
   - job: BuildDotNet
     displayName: 'Build .NET API'
-
     steps:
     - checkout: self
       fetchDepth: 1
-
     - task: Cache@2
       displayName: 'Cache NuGet Packages'
       inputs:
@@ -137,141 +99,106 @@ stages:
         restoreKeys: |
           nuget | "$(Agent.OS)"
         path: '$(Pipeline.Workspace)/.nuget'
-
     - bash: |
         set -euo pipefail
-
         cd "$(Build.SourcesDirectory)/$(backendPath)"
-
         export NUGET_PACKAGES="$(Pipeline.Workspace)/.nuget"
-
         echo "========== Restore NuGet Packages =========="
         dotnet restore StudentAPI.csproj \
           --packages "$NUGET_PACKAGES"
-
         echo "========== Build .NET API =========="
         dotnet build StudentAPI.csproj \
           --configuration "$(buildConfiguration)" \
           --no-restore
-
         echo "========== Test .NET API =========="
         dotnet test StudentAPI.csproj \
           --configuration "$(buildConfiguration)" \
           --no-build \
           --verbosity minimal
-
         echo ".NET build and tests completed successfully."
       displayName: 'Restore, Build and Test .NET API'
-
 
 # ============================================================
 # STAGE 3: BUILD AND PUSH DOCKER IMAGES
 # ============================================================
-
 - stage: Docker
   displayName: 'Docker Build and Push'
   dependsOn: Build
   condition: succeeded()
-
   jobs:
   - job: BuildPush
     displayName: 'Build and Push Frontend and API'
-
     steps:
     - checkout: self
       fetchDepth: 1
       clean: false
-
     - task: Docker@2
       displayName: 'Login to Quay.io'
       inputs:
         command: login
         containerRegistry: 'QuaySC'
-
     - bash: |
         set -euo pipefail
-
         FRONTEND_IMAGE="$(frontendImage):$(Build.BuildId)"
         API_IMAGE="$(apiImage):$(Build.BuildId)"
-
         echo "========== Build Docker Images =========="
-
         docker build --pull \
           -t "$FRONTEND_IMAGE" \
-          "$(Build.SourcesDirectory)/$(frontendPath)" &
+          "$INT$(Build.SourcesDirectory)/$(frontendPath)" &
         PID1=$!
-
         docker build --pull \
           -t "$API_IMAGE" \
           "$(Build.SourcesDirectory)/$(backendPath)" &
         PID2=$!
-
         # Check both build exit statuses
         BUILD1=0
         BUILD2=0
-
         wait "$PID1" || BUILD1=$?
         wait "$PID2" || BUILD2=$?
-
         if [ "$BUILD1" -ne 0 ] || [ "$BUILD2" -ne 0 ]; then
           echo "ERROR: One or both Docker builds failed."
           exit 1
         fi
-
         echo "========== Push Docker Images =========="
-
         docker push "$FRONTEND_IMAGE" &
         PID3=$!
-
         docker push "$API_IMAGE" &
         PID4=$!
-
         # Check both push exit statuses
         PUSH1=0
         PUSH2=0
-
         wait "$PID3" || PUSH1=$?
         wait "$PID4" || PUSH2=$?
-
         if [ "$PUSH1" -ne 0 ] || [ "$PUSH2" -ne 0 ]; then
           echo "ERROR: One or both Docker pushes failed."
           exit 1
         fi
-
         echo "========== Images Published =========="
         echo "Frontend: $FRONTEND_IMAGE"
         echo "API:      $API_IMAGE"
-
       displayName: 'Build and Push Both Images in Parallel'
-
     - bash: |
         docker logout quay.io || true
       displayName: 'Logout from Quay.io'
       condition: always()
 
-
 # ============================================================
 # STAGE 4: DEPLOY TO OPENSHIFT
 # ============================================================
-
 - stage: Deploy
   displayName: 'Deploy to OpenShift'
   dependsOn: Docker
   condition: succeeded()
-
   jobs:
   - job: Deploy
     displayName: 'Apply Manifests and Verify Rollout'
-
     steps:
     - checkout: self
       fetchDepth: 1
       clean: false
-
     # --------------------------------------------------------
     # Copy OpenShift manifests to CRC server
     # --------------------------------------------------------
-
     - task: CopyFilesOverSSH@0
       displayName: 'Copy OpenShift Manifests'
       inputs:
@@ -283,11 +210,9 @@ stages:
         targetFolder: '/tmp/eduadmin-$(Build.BuildId)'
         cleanTargetFolder: true
         overwrite: true
-
     # --------------------------------------------------------
     # Apply manifests and verify deployment
     # --------------------------------------------------------
-
     - task: SSH@0
       displayName: 'Deploy and Verify OpenShift Applications'
       inputs:
@@ -295,61 +220,39 @@ stages:
         runOptions: 'inline'
         inline: |
           set -euo pipefail
-
           PROJECT="$(openshiftProject)"
           MANIFEST="/tmp/eduadmin-$(Build.BuildId)"
-
           # Cleanup temporary manifests when the script exits
           trap 'rm -rf "$MANIFEST"' EXIT
-
           echo "========== OpenShift Login Check =========="
-
           oc whoami
           oc whoami --show-server
-
           echo "========== Create or Update Project =========="
-
           oc apply -f "$MANIFEST/bootstrap/namespace.yaml"
-
           echo "========== Validate Required Secret =========="
-
           if ! oc get secret studentapi-secret \
             -n "$PROJECT" >/dev/null 2>&1; then
-
             echo "ERROR: Secret studentapi-secret does not exist in $PROJECT."
             echo "Create the database Secret before deploying."
             exit 1
           fi
-
           echo "Required Secret exists."
-
           echo "========== Update Image Tag =========="
-
           sed -i \
             "s/__IMAGE_TAG__/$(Build.BuildId)/g" \
             "$MANIFEST/app/kustomization.yaml"
-
           echo "Image tag: $(Build.BuildId)"
-
           echo "========== Apply Kustomize Manifests =========="
-
           oc apply -k "$MANIFEST/app/" -n "$PROJECT"
-
           echo "========== Wait for Frontend Rollout =========="
-
           oc rollout status deployment/studentapp \
             -n "$PROJECT" \
             --timeout=180s
-
           echo "========== Wait for API Rollout =========="
-
           oc rollout status deployment/studentapi \
             -n "$PROJECT" \
             --timeout=180s
-
           echo "========== Final Deployment Status =========="
-
           oc get deployments,pods,services,routes \
             -n "$PROJECT"
-
           echo "========== Deployment Completed Successfully =========="

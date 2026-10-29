@@ -259,7 +259,7 @@ stages:
           - task: SSH@0
             displayName: Create eduadmin-dev Project
             inputs:
-              sshEndpoint: 'OpenShiftSC'
+              sshEndpoint: 'OpenShifSC'
               runOptions: 'commands'
               commands: |
                 if oc get project eduadmin-dev >/dev/null 2>&1; then

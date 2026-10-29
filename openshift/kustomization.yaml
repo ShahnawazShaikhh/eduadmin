@@ -1,4 +1,5 @@
 # deployment resources ki list maintain karegi.
+# Is file mein batate hain ki Kustomize ko kaun-kaun si YAML files process karni hain.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 

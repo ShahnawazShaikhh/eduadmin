@@ -262,9 +262,5 @@ stages:
               sshEndpoint: 'OpenShifSC'
               runOptions: 'commands'
               commands: |
-                if oc get project eduadmin-dev >/dev/null 2>&1; then
-                  echo "Project eduadmin-dev already exists"
-                else
-                  oc new-project eduadmin-dev
-                fi
+                if oc get project eduadmin-dev >/dev/null 2>&1; then echo "Project already exists"; else oc new-project eduadmin-dev; fi
   

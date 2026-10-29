@@ -227,3 +227,22 @@ stages:
               docker logout quay.io || true
             displayName: 'Logout from Quay.io'
             condition: always()
+
+  - stage: OpenShiftConnectionTest
+    displayName: Test OpenShift Server Connection
+  
+    jobs:
+      - job: SSHTest
+        displayName: Test SSH Connectivity
+  
+        steps:
+          - task: SSH@0
+            displayName: Connect to OpenShift CRC Server
+            inputs:
+              sshEndpoint: 'OpenShifSC'
+              runOptions: 'commands'
+              commands: |
+                hostname
+                whoami
+                oc whoami --show-server
+                crc status

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: studentapi
+  labels:
+    app.kubernetes.io/name: studentapi
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: studentapi
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

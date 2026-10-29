@@ -6,7 +6,7 @@ data:
   ASPNETCORE_ENVIRONMENT: "Production"
   ASPNETCORE_URLS: "http://+:8080"
   # Replace these values with the actual database endpoint/name.
-  DB_HOST: "REPLACE_WITH_DATABASE_HOST"
-  DB_PORT: "1433"
-  DB_NAME: "REPLACE_WITH_DATABASE_NAME"
+  DB_HOST: "192.168.8.35"
+  DB_PORT: "56755"
+  DB_NAME: "StudentDB"
   # Configure the frontend API URL in the Angular build/runtime config as required.

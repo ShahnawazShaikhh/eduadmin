@@ -1,0 +1,11 @@
+apiVersion: project.openshift.io/v1
+kind: Project
+metadata:
+  name: eduadmin-dev
+  labels:
+    app.kubernetes.io/part-of: eduadmin
+    app.kubernetes.io/managed-by: azure-devops
+    environment: dev
+  annotations:
+    openshift.io/description: "EduAdmin development environment"
+    openshift.io/display-name: "EduAdmin Dev"

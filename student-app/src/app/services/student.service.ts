@@ -14,7 +14,7 @@ export interface Student {
   providedIn: 'root'
 })
 export class StudentService {
-  private apiUrl = 'http://192.168.159.131:7272/api/Students';
+  private apiUrl = '/api/Students';
 
 
   constructor(private http: HttpClient) {}

@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/name: studentapp
     app.kubernetes.io/component: frontend
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 3
   strategy:
     type: RollingUpdate
